@@ -32,6 +32,9 @@ src/windgnn/
 results/
   figures/                      report figures (stage_a_*.png, stage_b_*.png)
   tables/                       result tables (stage_a_*.csv, stage_b_*.csv)
+scripts/
+  make_slide_assets.py          exports slide-ready figures/tables into slides/
+slides/                         presentation assets + PLACEMENT.md (where each one goes)
 data/interim/                   generated caches (gitignored)
 SDWPF_dataset/                  raw dataset — download separately (gitignored)
 pyproject.toml / uv.lock        environment definition
@@ -303,8 +306,9 @@ grid, and builds the upwind census that defines the exposure groups used by H2.
 
 **Primary configuration:** `R = 1500 m`, cone half-angle `phi = 45°`, `alpha = 275°`
 (18 rotor diameters along a column; mean in-degree 2.7, no isolated turbines; ~365 edges per
-snapshot). The size matters — at `R = 1000 m` a typical snapshot has only 52 edges and 45% of
-turbines are isolated, which would silently reduce the "graph" model to a per-turbine MLP.
+snapshot). The size matters — at `R = 1000 m` the sector-averaged mean in-degree is 1.08 and
+**22.6% of turbines are isolated on average** (45% in the worst directions), which would
+silently reduce the "graph" model to a per-turbine MLP.
 
 Because the wake signal is weak at this farm's spacing (deficits of a few kW against a 456 kW
 mean), `alpha` versus `alpha + 180 = 95°` is carried forward as the **reversed-direction
@@ -363,6 +367,20 @@ Running the notebooks writes:
   * `candidate_pairs_3000m.npz` — the precomputed pair geometry superset
   * `graph_meta.json` — the chosen graph parameters: `alpha_deg`, `radius_primary_m`,
     `cone_primary_deg` and the sweep grids
+
+### Presentation assets
+
+`slides/` holds figures and tables rendered at the **exact physical size of the slot they fill**
+in the 16:9 deck (25.4 × 14.29 cm page; 23.7 × 9.5 cm body). Drop them in at 100 % scale at the
+coordinates listed in `slides/PLACEMENT.md`; `slides/slide_text_drafts.md` has copy-paste text for
+the hypothesis and risk slides. Regenerate with:
+
+```bash
+PYTHONPATH=src MPLCONFIGDIR=.cache/mpl uv run python scripts/make_slide_assets.py
+```
+
+Slot sizes are the `S` dict at the top of that script, so a layout change means editing the dict
+rather than resizing images by hand.
 
 ---
 
