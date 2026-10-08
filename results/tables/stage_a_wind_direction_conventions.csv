@@ -1,0 +1,4 @@
+convention,description,cross_turbine_R,temporal_R,cross_turbine_R_calibrated
+absolute,Wdir is already the absolute wind direction (Ndir unused),0.9974623397779142,0.9984059686518033,0.9974736941946217
+rel_sum,absolute direction = Ndir + Wdir (wind side of the nacelle),0.4686707657109571,0.27775023760501855,0.9586638296439955
+rel_diff,absolute direction = Ndir - Wdir (opposite sign convention),0.4665270222008658,0.27480795119258333,0.9535522505331844

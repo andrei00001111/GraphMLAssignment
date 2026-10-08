@@ -1,0 +1,9 @@
+,0
+farm mean power [kW],456.03
+per-turbine mean: min,268.49
+per-turbine mean: max,562.75
+per-turbine std: min,327.56
+per-turbine std: max,530.05
+per-turbine std: mean,426.65
+shutdown ratio (mean over turbines),0.06
+capacity factor (farm),0.3

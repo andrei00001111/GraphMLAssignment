@@ -1,0 +1,28 @@
+.venv
+lectures
+important_links.txt
+labs
+referenced_papers
+# Not for publication / not part of the code deliverable
+PLAN.md
+feedback.txt
+GML_Proposal_1page.md
+
+# --- Large / regenerable artifacts (see PLAN.md section 2) ---
+# Raw SDWPF release: download separately, never commit (~3 GB)
+SDWPF_dataset/
+# uv package cache (redirected into the repo: ~/.cache is read-only in this sandbox)
+.uv-cache/
+# matplotlib / jupyter / ipython config + runtime dirs
+.cache/
+# Cached parquet, graph tensors, wind-direction tables
+data/interim/
+data/raw/
+*.npz
+*.parquet
+
+# --- Notebook / Python noise ---
+.ipynb_checkpoints/
+__pycache__/
+*.py[cod]
+.DS_Store

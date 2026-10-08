@@ -1,0 +1,4 @@
+neighbour_group,count,min,p25,median,p75,max
+within_column,134,406.6,470.3,474.1,475.7,542.9
+across_columns,134,888.1,968.8,991.3,1010.5,1471.5
+any,134,406.6,470.3,474.1,475.7,542.9

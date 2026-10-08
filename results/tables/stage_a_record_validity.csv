@@ -1,0 +1,6 @@
+category,records,share_%
+zero (Patv<0),1263062,26.72
+missing (any NaN),49518,1.05
+unknown (stopped/feathered),1082113,22.89
+abnormal (Ndir/Wdir range),127,0.0
+target_valid,3595859,76.06

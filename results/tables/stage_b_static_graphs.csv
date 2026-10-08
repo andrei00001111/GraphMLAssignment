@@ -1,0 +1,9 @@
+graph,edges,undirected_density,isolated
+distance kNN (k=5),380,0.0426,0
+distance kNN (k=10),751,0.0843,0
+distance kNN (k=20),1535,0.1723,0
+radius <= 600 m,125,0.014,0
+radius <= 1000 m,290,0.0325,0
+radius <= 1500 m,729,0.0818,0
+radius <= 3000 m,2376,0.2666,0
+fully connected,8911,1.0,0
