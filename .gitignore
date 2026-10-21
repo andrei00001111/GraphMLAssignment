@@ -15,9 +15,8 @@ SDWPF_dataset/
 .uv-cache/
 # matplotlib / jupyter / ipython config + runtime dirs
 .cache/
-# Cached parquet, graph tensors, wind-direction tables
-data/interim/
-data/raw/
+# Local data folder (SCADA extracts, cached tables, trained models): never commit
+data/
 *.npz
 *.parquet
 
