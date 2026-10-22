@@ -1,0 +1,4 @@
+scenario,masked & valid (all),masked & valid (test)
+mcar 20%,720933,140324
+block gaps (40/turbine),37949,8393
+20 silent turbines,538265,104785

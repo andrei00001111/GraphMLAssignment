@@ -3,7 +3,7 @@ name = "graphmlassignment"
 version = "0.1.0"
 description = "Wind-following GNN for wind-turbine power forecasting on the SDWPF dataset"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.13,<3.14"
 dependencies = [
     "ipykernel>=7.4.0",
     "matplotlib>=3.11.2",
@@ -20,3 +20,18 @@ dependencies = [
     "seaborn>=0.13.2",
     "tqdm>=4.70.1",
 ]
+
+# torch is taken from the ROCm 7.1 build so the Radeon RX 7900 XT (gfx1100) can be used.
+# If that ever fails, drop the two blocks below and install the CPU wheel instead:
+#   uv add torch --index-url https://download.pytorch.org/whl/cpu
+# (torch 2.10+rocm7.0 was rejected: it pins triton-rocm==3.6.0, which has no cp313 wheel.)
+[[tool.uv.index]]
+name = "pytorch-rocm"
+url = "https://download.pytorch.org/whl/rocm7.1"
+explicit = true
+
+# torch (+ its ROCm-only dependency triton-rocm) must be mapped explicitly, otherwise uv
+# looks for triton-rocm on PyPI, where it does not exist.
+[tool.uv.sources]
+torch = { index = "pytorch-rocm" }
+triton-rocm = { index = "pytorch-rocm" }

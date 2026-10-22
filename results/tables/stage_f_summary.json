@@ -1,0 +1,25 @@
+{
+  "n_explanations": 150,
+  "attention_auprc_upwind_mean": 0.22574837199837194,
+  "attention_auprc_downwind_mean": 0.7378779141865079,
+  "attention_sparsity_mean": 0.9996536311627646,
+  "methods": {
+    "attention": 0.226,
+    "gnnexplainer": 0.438,
+    "occlusion": 0.414
+  },
+  "faithfulness": {
+    "kept_delta_kW": {
+      "attention": -8.0,
+      "gnnexplainer": 9.64,
+      "occlusion": 16.22
+    },
+    "removed_delta_kW": {
+      "attention": 5.46,
+      "gnnexplainer": -0.75,
+      "occlusion": -1.43
+    }
+  },
+  "rotation_difference_mean": -0.570993265993266,
+  "rotation_sectors_scored": 3
+}

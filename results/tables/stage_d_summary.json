@@ -1,0 +1,28 @@
+{
+  "run": "full",
+  "checkpoint": "results/checkpoints/stage_d_soft_seed0.pt",
+  "graph": "soft cone (primary)",
+  "best_val_kW": 157.31216430664062,
+  "params": 48067,
+  "overall": {
+    "complete data": 138.23,
+    "random 5%": 139.52,
+    "random 10%": 140.65,
+    "random 20%": 143.37,
+    "random 30%": 146.01,
+    "random 40%": 149.27,
+    "random 50%": 152.94,
+    "block 10%": 140.96,
+    "whole columns": 143.07
+  },
+  "persistence_by_horizon": {
+    "10 min": 52.97,
+    "60 min": 128.22,
+    "360 min": 263.3
+  },
+  "model_by_horizon": {
+    "10 min": 57.03,
+    "60 min": 124.78,
+    "360 min": 233.52
+  }
+}
