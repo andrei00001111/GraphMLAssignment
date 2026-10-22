@@ -4,6 +4,6 @@ Stage A (data analysis) and Stage B (graph construction) live here; later stages
 (models, training, explainability) extend the same package.
 """
 
-from . import config, data, graphs, viz  # noqa: F401
+from . import baselines, config, data, graphs, viz  # noqa: F401
 
-__all__ = ["config", "data", "graphs", "viz"]
+__all__ = ["baselines", "config", "data", "graphs", "viz"]
