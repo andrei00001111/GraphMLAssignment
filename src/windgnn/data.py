@@ -362,10 +362,16 @@ def add_derived(df: pd.DataFrame, convention: str | None = None) -> pd.DataFrame
 # Record flagging
 # --------------------------------------------------------------------------- #
 
-FLAG_COLUMNS = ["is_missing", "is_zero", "is_unknown", "is_abnormal", "target_valid"]
+FLAG_COLUMNS = [
+    "is_missing", "is_zero", "is_unknown", "is_abnormal", "is_temp_abnormal", "target_valid",
+]
 
 
-def flag_records(df: pd.DataFrame, clip_negative_power: bool = True) -> pd.DataFrame:
+def flag_records(
+    df: pd.DataFrame,
+    clip_negative_power: bool = True,
+    scrub_temperatures: bool = True,
+) -> pd.DataFrame:
     """Apply the dataset's validity rules and add one boolean column per category.
 
     ``is_missing`` describes the whole record (any measurement absent), whereas
@@ -390,9 +396,22 @@ def flag_records(df: pd.DataFrame, clip_negative_power: bool = True) -> pd.DataF
     )
     out["is_abnormal"] = ndir_bad | wdir_bad
 
+    etmp_lo, etmp_hi = C.ETMP_PLAUSIBLE_RANGE
+    itmp_lo, itmp_hi = C.ITMP_PLAUSIBLE_RANGE
+    etmp_bad = out["Etmp"].notna() & ((out["Etmp"] < etmp_lo) | (out["Etmp"] > etmp_hi))
+    itmp_bad = out["Itmp"].notna() & ((out["Itmp"] < itmp_lo) | (out["Itmp"] > itmp_hi))
+    out["is_temp_abnormal"] = etmp_bad | itmp_bad
+
+    # target_valid stays exactly the published KDD Cup exclusion rule (metrics.py,
+    # turbine_scores) so our scores remain comparable; temperature faults are flagged
+    # separately because they corrupt inputs, not targets.
     out["target_valid"] = ~(
         out[C.TARGET_COL].isna() | out["is_unknown"] | out["is_abnormal"]
     )
+
+    if scrub_temperatures:
+        out.loc[etmp_bad, "Etmp"] = np.nan
+        out.loc[itmp_bad, "Itmp"] = np.nan
 
     if clip_negative_power:
         out[C.TARGET_COL] = out[C.TARGET_COL].clip(lower=0.0)

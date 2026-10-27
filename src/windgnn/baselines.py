@@ -397,19 +397,36 @@ def run(
     n_test: int | None = 40_000,
     models=DEFAULT_MODELS,
     verbose: bool = True,
+    purge: int | None = None,
 ) -> pd.DataFrame:
-    """Fit and score every model at every silence length. One row per (model, s)."""
+    """Fit and score every model at every silence length. One row per (model, s).
+
+    ``purge`` forces the history headroom the episode sampler leaves, instead of deriving
+    it from this call's model list. Pass the value an earlier run used when you want rows
+    that are comparable to it: dropping a long-history model from the list would
+    otherwise shorten the purge and silently draw a different episode set.
+    """
     import time
+
+    # Purging is only honoured if the episode set leaves room for the LONGEST history any
+    # model reads; a model declaring `required_window` would otherwise reach back across
+    # the split boundary for episodes near the start of the test block.
+    need = max([window] + [getattr(m, "required_window", 0) for m in models])
+    if purge is not None:
+        if purge < need:
+            raise ValueError(f"purge={purge} is shorter than the {need} steps these models read")
+        need = purge
 
     rows = []
     for s in silences:
-        ep = sample_episodes(ctx, "test", s, n_test, window, np.random.default_rng(RNG_SEED))
+        ep = sample_episodes(ctx, "test", s, n_test, need, np.random.default_rng(RNG_SEED))
         truth = ep.truth(ctx).astype(np.float64)
         if verbose:
             print(f"s = {s:3d} ({s * C.SAMPLE_MINUTES:4d} min)   test episodes: {len(ep):,}")
         for cls in models:
             t0 = time.time()
-            model = cls().fit(ctx, s, window)
+            # accept either a class or a ready-made instance (models needing extra state)
+            model = (cls() if isinstance(cls, type) else cls).fit(ctx, s, window)
             pred = model.predict(ctx, ep)
             row = {"model": model.name, "silence": s, "minutes": s * C.SAMPLE_MINUTES}
             row.update(score(truth, pred))

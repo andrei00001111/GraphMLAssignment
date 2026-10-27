@@ -78,6 +78,13 @@ PITCH_UNKNOWN_THRESHOLD = 89.0   # deg: blades feathered => turbine at rest
 NDIR_ABNORMAL_RANGE = (-720.0, 720.0)
 WDIR_ABNORMAL_RANGE = (-180.0, 180.0)
 
+#: Temperature plausibility bounds. NOT part of the published validity rule -- the KDD Cup
+#: scoring function checks only Patv/Wspd/pitch and the Ndir/Wdir ranges, so these sensor
+#: faults reach every model that uses Etmp/Itmp as an input. Etmp/Itmp both carry a -273 C
+#: (absolute zero) fault sentinel and run as high as 394 C / 324 C.
+ETMP_PLAUSIBLE_RANGE = (-40.0, 60.0)
+ITMP_PLAUSIBLE_RANGE = (-40.0, 90.0)
+
 #: Chronological split used by Zhang et al. 2026 (70 / 10 / 20 %), in days.
 SPLIT_DAYS = {"train": (1, 171), "val": (172, 196), "test": (197, 245)}
 
