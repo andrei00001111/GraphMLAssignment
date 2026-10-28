@@ -277,14 +277,21 @@ class NeuralGapFill(B.Baseline):
 
     required_window = 12
 
+    LOSSES = {"mse": nn.MSELoss, "l1": nn.L1Loss, "huber": nn.HuberLoss}
+
     def __init__(self, kind: str = "mlp", n_train: int = 40_000, n_val: int = 6_000,
                  epochs: int = 6, batch: int = 256, lr: float = 1e-3, k: int = 8,
-                 patience: int = 2, verbose: bool = False):
+                 patience: int = 2, verbose: bool = False, loss: str = "mse",
+                 seed: int = SEED):
         self.kind = kind
         self.name = {"mlp": "mlp", "transformer": "transformer", "gnn": "gnn-gatv2"}[kind]
         self.n_train, self.n_val = n_train, n_val
         self.epochs, self.batch, self.lr = epochs, batch, lr
         self.k, self.patience, self.verbose = k, patience, verbose
+        # `mse` is the natural loss for RMSE, `l1` for MAE. The ridge baselines pick their
+        # alpha on validation MAE, so comparing an MSE-trained network against them on MAE
+        # scores each family on the metric only one of them was tuned for.
+        self.loss, self.seed = loss, seed
 
     def _build(self, window):
         n = C.N_TURBINES
@@ -307,9 +314,9 @@ class NeuralGapFill(B.Baseline):
         return gen
 
     def fit(self, ctx, s, window):
-        torch.manual_seed(SEED)
+        torch.manual_seed(self.seed)
         torch.set_num_threads(THREADS)
-        rng = np.random.default_rng(SEED)
+        rng = np.random.default_rng(self.seed)
         self.sc_ = Standardiser().fit(ctx)
         self.window = window
 
@@ -323,7 +330,7 @@ class NeuralGapFill(B.Baseline):
         self.n_params_ = n_parameters(model)
         opt = torch.optim.AdamW(model.parameters(), lr=self.lr, weight_decay=1e-4)
         sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=self.epochs)
-        crit = nn.MSELoss()
+        crit = self.LOSSES[self.loss]()
         train_b = self._batches(ctx, tr, s, window, itr, True, rng)
         val_b = self._batches(ctx, va, s, window, iva, False, rng)
 
@@ -363,7 +370,8 @@ class NeuralGapFill(B.Baseline):
                     break
         if best_state is not None:
             model.load_state_dict(best_state)
-        self.model_, self.dev_, self.val_mse_ = model, dev, best
+        # named for the loss actually optimised, which is not always MSE
+        self.model_, self.dev_, self.val_loss_ = model, dev, best
         return self
 
     def predict(self, ctx, ep):
