@@ -142,13 +142,26 @@ def _device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def _train(model, batches, val_batches, epochs, lr=None, patience=PATIENCE, verbose=True):
-    """Adam + MSE on standardised targets, halving LR each epoch, with early stopping."""
+#: ``paper_code/common.py:210`` uses ``nn.MSELoss`` and nothing else. The official score is
+#: ``(MAE + RMSE) / 2`` (``paper_code/evaluation.py:95``), so the published baseline trains
+#: for only the RMSE half of its own metric; ``huber`` is the loss that matches the blend.
+#: ``nn.HuberLoss`` uses delta=1.0, which on standardised targets is one training standard
+#: deviation -- not tuned.
+LOSSES = {"mse": nn.MSELoss, "l1": nn.L1Loss, "huber": nn.HuberLoss}
+
+
+def _train(model, batches, val_batches, epochs, lr=None, patience=PATIENCE, verbose=True,
+           loss="mse"):
+    """Adam on standardised targets, halving LR each epoch, with early stopping.
+
+    ``loss`` selects the training criterion; early stopping scores validation with the
+    same criterion, so each arm is selected on the objective it was trained for.
+    """
     lr = LR if lr is None else lr
     dev = _device()
     model.to(dev)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    crit = nn.MSELoss()
+    crit = LOSSES[loss]()
     best, best_state, bad = np.inf, None, 0
     for epoch in range(1, epochs + 1):
         for group in opt.param_groups:                 # paper_code lr_adjust 'type1'
@@ -256,7 +269,7 @@ def exclusion_mask(dout: pd.DataFrame) -> np.ndarray:
 
 
 def run_paper_protocol(df, n_windows=120_000, epochs=4, batch=128, limit_cases=None,
-                       verbose=True):
+                       verbose=True, loss="mse"):
     """Train on the paper's day split, score with the official metric on its test files.
 
     Deviation from the published run, forced by the hardware available: the paper fits
@@ -299,7 +312,7 @@ def run_paper_protocol(df, n_windows=120_000, epochs=4, batch=128, limit_cases=N
 
     model = BaselineGru(output_len=OUTPUT_LEN)
     _train(model, make_batches(tr_starts, n_windows), make_batches(va_starts, n_windows // 8),
-           epochs=epochs, verbose=verbose)
+           epochs=epochs, verbose=verbose, loss=loss)
 
     dev = _device()
     model.eval()

@@ -182,23 +182,75 @@ def _own_lags(ctx: Context, t: np.ndarray, turb: np.ndarray, s: int, window: int
     return vals.astype(np.float64)
 
 
-def _peer_power(ctx: Context, t: np.ndarray, turb: np.ndarray) -> np.ndarray:
+def peer_visibility(
+    ctx: Context,
+    t: np.ndarray,
+    turb: np.ndarray,
+    n_visible: int,
+    seed: int = RNG_SEED,
+) -> np.ndarray:
+    """``(B, N)`` bool: which peers report, in a regime where only ``n_visible`` do.
+
+    Which peers survive is a deterministic function of the episode itself -- a hash of
+    ``(t, turbine)`` -- not of call order or of how the batches fell. One episode
+    therefore shows the same subset while training, while validating and at test time,
+    and every model is handed the identical subset, so a gap between two models cannot
+    be a gap in which peers they happened to get.
+
+    The target's own column never counts towards ``n_visible``; it is hidden either way.
+    A peer that is already dark stays dark, so the number actually reporting is at most
+    ``n_visible`` -- the regime is an upper bound on access, not a guarantee of it.
+    """
+    n = ctx.n_turbines
+    key = t.astype(np.uint64) * np.uint64(n) + turb.astype(np.uint64)
+    x = key[:, None] * np.uint64(n) + np.arange(n, dtype=np.uint64)[None, :] + np.uint64(seed)
+    # splitmix64 finaliser: vectorised, and decorrelates adjacent (t, turbine) keys, which
+    # consecutive steps of one turbine would otherwise share almost entirely
+    x = x ^ (x >> np.uint64(30))
+    x = x * np.uint64(0xBF58476D1CE4E5B9)
+    x = x ^ (x >> np.uint64(27))
+    x = x * np.uint64(0x94D049BB133111EB)
+    x = x ^ (x >> np.uint64(31))
+    x[np.arange(t.size), turb] = np.iinfo(np.uint64).max      # target sorts last
+    vis = np.zeros((t.size, n), dtype=bool)
+    np.put_along_axis(vis, np.argsort(x, axis=1)[:, :n_visible], True, axis=1)
+    return vis
+
+
+def _peer_power(
+    ctx: Context, t: np.ndarray, turb: np.ndarray, visible: np.ndarray | None = None
+) -> np.ndarray:
     """Every other turbine's power at the step being predicted, own column zeroed.
 
     A peer that is itself dark is filled with the mean over reporting turbines
     *excluding the masked one*. Using the plain farm mean would feed the answer back in
     at roughly 1/134 weight, which is leakage, not imputation.
+
+    ``visible`` restricts which peers report at all (see ``peer_visibility``). A hidden
+    peer is filled exactly like a dark one, so the model cannot tell the two apart. The
+    fill is then the mean over the *visible* reporters only: taking it over every
+    reporter, as the unrestricted path does, would hand back an aggregate of the very
+    peers being withheld and make the restriction mostly cosmetic.
     """
     block = ctx.power[t].astype(np.float64)
-    own = ctx.power[t, turb]
-    has_own = np.isfinite(own)
-    tot = np.where(has_own, ctx.obs_sum[t] - np.nan_to_num(own), ctx.obs_sum[t])
-    cnt = np.where(has_own, ctx.obs_count[t] - 1.0, ctx.obs_count[t])
+    rows = np.arange(t.size)
+    if visible is None:
+        own = ctx.power[t, turb]
+        has_own = np.isfinite(own)
+        tot = np.where(has_own, ctx.obs_sum[t] - np.nan_to_num(own), ctx.obs_sum[t])
+        cnt = np.where(has_own, ctx.obs_count[t] - 1.0, ctx.obs_count[t])
+        gap = ~np.isfinite(block)
+    else:
+        obs = np.isfinite(block) & visible
+        obs[rows, turb] = False
+        tot = np.where(obs, np.nan_to_num(block), 0.0).sum(axis=1)
+        cnt = obs.sum(axis=1).astype(np.float64)
+        gap = ~obs
+        gap[rows, turb] = True
     loo = np.divide(tot, cnt, out=np.zeros_like(tot), where=cnt > 0)
-    gap = ~np.isfinite(block)
     if gap.any():
         block[gap] = np.broadcast_to(loo[:, None], block.shape)[gap]
-    block[np.arange(t.size), turb] = 0.0
+    block[rows, turb] = 0.0
     return block
 
 
@@ -314,12 +366,25 @@ class LinearPeers(Baseline):
 
 
 class LinearBoth(Baseline):
-    """Ridge on own history and all other turbines together. Linear ceiling."""
+    """Ridge on own history and all other turbines together. Linear ceiling.
+
+    ``n_visible`` caps how many peers report, at fit time as well as at predict time:
+    the coefficients are learned in the same regime they are scored in, so the model is
+    not a 133-peer ridge being asked to cope with 10 inputs it never saw missing.
+    """
 
     name = "linear-both"
 
-    def __init__(self, n_train: int = 8_000):
+    def __init__(self, n_train: int = 8_000, n_visible: int | None = None):
         self.n_train = n_train
+        self.n_visible = n_visible
+        if n_visible is not None:
+            self.name = f"linear-both[{n_visible}p]"
+
+    def _vis(self, ctx, t, turb):
+        if self.n_visible is None:
+            return None
+        return peer_visibility(ctx, t, turb, self.n_visible)
 
     def fit(self, ctx, s, window):
         rng = np.random.default_rng(RNG_SEED)
@@ -338,13 +403,15 @@ class LinearBoth(Baseline):
                 continue
             Xtr = np.hstack(
                 [
-                    _peer_power(ctx, tr.t[mt], tr.turb[mt]),
+                    _peer_power(ctx, tr.t[mt], tr.turb[mt],
+                                self._vis(ctx, tr.t[mt], tr.turb[mt])),
                     _own_lags(ctx, tr.t[mt], tr.turb[mt], s, window),
                 ]
             )
             Xva = np.hstack(
                 [
-                    _peer_power(ctx, va.t[mv], va.turb[mv]),
+                    _peer_power(ctx, va.t[mv], va.turb[mv],
+                                self._vis(ctx, va.t[mv], va.turb[mv])),
                     _own_lags(ctx, va.t[mv], va.turb[mv], s, window),
                 ]
             )
@@ -367,7 +434,8 @@ class LinearBoth(Baseline):
                 continue
             X = np.hstack(
                 [
-                    _peer_power(ctx, ep.t[m], ep.turb[m]),
+                    _peer_power(ctx, ep.t[m], ep.turb[m],
+                                self._vis(ctx, ep.t[m], ep.turb[m])),
                     _own_lags(ctx, ep.t[m], ep.turb[m], ep.s, self.window),
                 ]
             )

@@ -134,14 +134,22 @@ class Standardiser:
         return z * self.std + self.mean
 
 
-def snapshot(ctx, t, turb, s, window, sc: Standardiser):
+def snapshot(ctx, t, turb, s, window, sc: Standardiser, visible=None):
     """``(nodes, own)``: per-turbine channels ``(B, N, 3)`` and own lags ``(B, window)``.
 
     Node channels are ``[power, observed, is_target]``. The target's power channel is
     zeroed and its ``observed`` flag cleared, so the snapshot never contains the answer.
+
+    ``visible`` withholds peers (``B.peer_visibility``). A withheld peer is given the
+    treatment an already-dark one gets -- the training mean, flagged ``observed = 0`` --
+    so the restriction removes information without introducing a new kind of input. A
+    graph can still reach a withheld turbine's neighbourhood in two hops; a flat model
+    cannot, which is the whole point of varying it.
     """
     block = ctx.power[t].astype(np.float64)
     obs = np.isfinite(block)
+    if visible is not None:
+        obs = obs & visible
     rows = np.arange(t.size)
     p = np.where(obs, sc.z(np.nan_to_num(block)), 0.0)
     o = obs.astype(np.float64)
@@ -282,9 +290,13 @@ class NeuralGapFill(B.Baseline):
     def __init__(self, kind: str = "mlp", n_train: int = 40_000, n_val: int = 6_000,
                  epochs: int = 6, batch: int = 256, lr: float = 1e-3, k: int = 8,
                  patience: int = 2, verbose: bool = False, loss: str = "mse",
-                 seed: int = SEED):
+                 seed: int = SEED, n_visible: int | None = None):
         self.kind = kind
         self.name = {"mlp": "mlp", "transformer": "transformer", "gnn": "gnn-gatv2"}[kind]
+        # trained in the same peer-availability regime it is scored in
+        self.n_visible = n_visible
+        if n_visible is not None:
+            self.name = f"{self.name}[{n_visible}p]"
         self.n_train, self.n_val = n_train, n_val
         self.epochs, self.batch, self.lr = epochs, batch, lr
         self.k, self.patience, self.verbose = k, patience, verbose
@@ -292,6 +304,11 @@ class NeuralGapFill(B.Baseline):
         # alpha on validation MAE, so comparing an MSE-trained network against them on MAE
         # scores each family on the metric only one of them was tuned for.
         self.loss, self.seed = loss, seed
+
+    def _vis(self, ctx, t, turb):
+        if self.n_visible is None:
+            return None
+        return B.peer_visibility(ctx, t, turb, self.n_visible)
 
     def _build(self, window):
         n = C.N_TURBINES
@@ -307,7 +324,8 @@ class NeuralGapFill(B.Baseline):
             order = rng.permutation(idx) if shuffle else idx
             for a in range(0, order.size, self.batch):
                 sel = order[a : a + self.batch]
-                nodes, own = snapshot(ctx, ep.t[sel], ep.turb[sel], s, window, self.sc_)
+                nodes, own = snapshot(ctx, ep.t[sel], ep.turb[sel], s, window, self.sc_,
+                                      self._vis(ctx, ep.t[sel], ep.turb[sel]))
                 y = self.sc_.z(ep.truth(ctx)[sel].astype(np.float64)).astype(np.float32)
                 yield (torch.from_numpy(nodes), torch.from_numpy(own),
                        torch.from_numpy(ep.turb[sel].astype(np.int64)), torch.from_numpy(y))
@@ -380,7 +398,8 @@ class NeuralGapFill(B.Baseline):
         with torch.no_grad():
             for a in range(0, len(ep), 1024):
                 sl = slice(a, min(a + 1024, len(ep)))
-                nodes, own = snapshot(ctx, ep.t[sl], ep.turb[sl], ep.s, self.window, self.sc_)
+                nodes, own = snapshot(ctx, ep.t[sl], ep.turb[sl], ep.s, self.window, self.sc_,
+                                      self._vis(ctx, ep.t[sl], ep.turb[sl]))
                 z = self.model_(
                     torch.from_numpy(nodes).to(self.dev_),
                     torch.from_numpy(own).to(self.dev_),
