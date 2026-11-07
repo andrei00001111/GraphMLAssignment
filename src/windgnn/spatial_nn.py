@@ -64,6 +64,38 @@ def knn_edges(k: int = 8) -> tuple[np.ndarray, np.ndarray]:
     return arr[:, 0], arr[:, 1]
 
 
+PREVAILING_WIND_DEG = 345.0      # modal 30-deg sector; 85% of records fall in 330-30
+FARM_ALPHA_DEG = 275.0           # farm +y azimuth, as estimated in stage B
+
+
+def cone_edges(cone_deg: float = 45.0, radius_m: float = 1500.0,
+               wind_from_deg: float = PREVAILING_WIND_DEG,
+               alpha_deg: float = FARM_ALPHA_DEG,
+               reverse: bool = False) -> tuple[np.ndarray, np.ndarray]:
+    """Static wind-following edges: upwind turbine -> downwind turbine.
+
+    ``reverse`` returns the exact transpose. That is the control the cone-versus-kNN
+    comparison cannot provide: a cone and a kNN graph differ in connectivity as well as
+    in direction, so a cone losing to kNN says nothing about direction. The reversed
+    cone has the same edge count and the same degree sequence as the forward one and is
+    physically wrong, so if direction carries the signal, reversing it must cost
+    something.
+
+    The graph is fixed rather than rebuilt per snapshot: a per-episode edge list would
+    force the batched GATv2 to rebuild its index tensors every batch, and the wind here
+    is strongly unimodal -- 45% of records in the 330-360 sector and 40% in 0-30 -- so a
+    static cone at the prevailing direction is close to the dynamic one most of the time.
+    """
+    from . import graphs as G
+
+    loc = D.load_location()
+    pairs = G.candidate_pairs(loc, radius_m)
+    e = G.edges_for_direction(pairs, wind_from_deg, alpha_deg, cone_deg, radius_m)
+    up = e["i_idx"].to_numpy(dtype=np.int64)
+    down = e["j_idx"].to_numpy(dtype=np.int64)
+    return (down, up) if reverse else (up, down)
+
+
 # --------------------------------------------------------------------------- #
 # Unweighted neighbour means (the stage C rungs, on the silence axis)
 # --------------------------------------------------------------------------- #
@@ -276,6 +308,52 @@ class GnnGapFill(nn.Module):
         return self.out(h[rows, turb]).squeeze(-1)
 
 
+class _GcnLayer(nn.Module):
+    """Mean aggregation over the same edge list: GATv2 with the attention removed.
+
+    The control for whether attention, rather than the graph, is what fails when most
+    of the farm goes dark. A softmax over edges entering a node has to normalise over
+    whatever is there; when nearly every neighbour is dark it concentrates weight on
+    the few that remain. A mean degrades smoothly instead.
+    """
+
+    def __init__(self, dim: int, dropout: float = 0.1):
+        super().__init__()
+        self.lin = nn.Linear(dim, dim)
+        self.drop = nn.Dropout(dropout)
+
+    def forward(self, x, src, dst):
+        bsz, n, _ = x.shape
+        z = self.drop(self.lin(x))
+        out = torch.zeros_like(z)
+        out.index_add_(1, dst, z[:, src])
+        deg = torch.zeros(n, device=x.device, dtype=z.dtype)
+        deg.index_add_(0, dst, torch.ones(dst.numel(), device=x.device, dtype=z.dtype))
+        return out / deg.clamp(min=1.0).view(1, n, 1)
+
+
+class GcnGapFill(nn.Module):
+    """Two mean-aggregation hops over a fixed graph, read out at the masked turbine."""
+
+    def __init__(self, n_turbines: int, window: int, src, dst, dim: int = 48,
+                 layers: int = 2, dropout: float = 0.1):
+        super().__init__()
+        self.stem = _Stem(n_turbines, window, dim)
+        self.register_buffer("src", torch.as_tensor(src, dtype=torch.long))
+        self.register_buffer("dst", torch.as_tensor(dst, dtype=torch.long))
+        self.layers = nn.ModuleList(_GcnLayer(dim, dropout) for _ in range(layers))
+        self.norms = nn.ModuleList(nn.LayerNorm(dim) for _ in range(layers))
+        self.act = nn.GELU()
+        self.out = nn.Linear(dim, 1)
+
+    def forward(self, nodes, own, turb):
+        h = self.stem(nodes, own, turb)
+        for layer, norm in zip(self.layers, self.norms):
+            h = norm(h + self.act(layer(h, self.src, self.dst)))
+        rows = torch.arange(h.shape[0], device=h.device)
+        return self.out(h[rows, turb]).squeeze(-1)
+
+
 # --------------------------------------------------------------------------- #
 # The Baseline wrapper that trains any of them
 # --------------------------------------------------------------------------- #
@@ -287,12 +365,21 @@ class NeuralGapFill(B.Baseline):
 
     LOSSES = {"mse": nn.MSELoss, "l1": nn.L1Loss, "huber": nn.HuberLoss}
 
+    GRAPHS = ("knn", "cone", "cone-rev")
+
     def __init__(self, kind: str = "mlp", n_train: int = 40_000, n_val: int = 6_000,
                  epochs: int = 6, batch: int = 256, lr: float = 1e-3, k: int = 8,
                  patience: int = 2, verbose: bool = False, loss: str = "mse",
-                 seed: int = SEED, n_visible: int | None = None):
+                 seed: int = SEED, n_visible: int | None = None, graph: str = "knn"):
         self.kind = kind
-        self.name = {"mlp": "mlp", "transformer": "transformer", "gnn": "gnn-gatv2"}[kind]
+        self.name = {"mlp": "mlp", "transformer": "transformer",
+                     "gnn": "gnn-gatv2", "gcn": "gcn"}[kind]
+        # which edges the message passing runs over; ignored by mlp and transformer
+        if graph not in self.GRAPHS:
+            raise ValueError(f"graph must be one of {self.GRAPHS}, got {graph!r}")
+        self.graph = graph
+        if kind in ("gnn", "gcn") and graph != "knn":
+            self.name = f"{self.name}-{graph}"
         # trained in the same peer-availability regime it is scored in
         self.n_visible = n_visible
         if n_visible is not None:
@@ -310,13 +397,20 @@ class NeuralGapFill(B.Baseline):
             return None
         return B.peer_visibility(ctx, t, turb, self.n_visible)
 
+    def _edges(self):
+        if self.graph == "knn":
+            return knn_edges(self.k)
+        return cone_edges(reverse=self.graph == "cone-rev")
+
     def _build(self, window):
         n = C.N_TURBINES
         if self.kind == "mlp":
             return MlpGapFill(n, window)
         if self.kind == "transformer":
             return TransformerGapFill(n, window)
-        src, dst = knn_edges(self.k)
+        src, dst = self._edges()
+        if self.kind == "gcn":
+            return GcnGapFill(n, window, src, dst)
         return GnnGapFill(n, window, src, dst)
 
     def _batches(self, ctx, ep, s, window, idx, shuffle, rng):
